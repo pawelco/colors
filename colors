@@ -1,0 +1,474 @@
+// ========================================================
+    // COLOR VIEW (PERFECT 5x16 GRID OPTICAL MERGE)
+    // ========================================================
+    private var colorSelectedGroup = 0
+    private val groupColorIndices = IntArray(8) { -1 }
+    private var colorViewRefreshCallback: (() -> Unit)? = null
+
+    private fun createColorView(): View {
+        val totalHeight = resources.displayMetrics.heightPixels - exactRowHeight
+        val singleRowHeight = (totalHeight / 8.0).toInt()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; weightSum = 10.0f
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            setBackgroundColor(Color.LTGRAY)
+        }
+
+        val leftPanel = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2.0f).apply { setMargins(10, 10, 5, 10) }
+        }
+
+        val dmxValsPanel = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, singleRowHeight * 5)
+            setBackgroundColor(Color.parseColor("#333333")); setPadding(10, 6, 10, 6)
+        }
+
+        // Pełne nazwy parametrów + COL. WHL
+        val colorLabels = listOf("RED", "GREEN", "BLUE", "WHITE", "AMBER", "UV", "DIMMER", "COL. WHL")
+        val dmxValTextViews = mutableListOf<TextView>()
+        colorLabels.forEach { lbl ->
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; weightSum = 2.0f
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f)
+            }
+            val tLbl = TextView(this@MainActivity).apply {
+                text = lbl; textSize = 16f; setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
+            }
+            val tVal = TextView(this@MainActivity).apply {
+                text = "---"; textSize = 16f; setTextColor(Color.parseColor("#00FFFF"))
+                gravity = Gravity.END
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.8f)
+            }
+            dmxValTextViews.add(tVal); row.addView(tLbl); row.addView(tVal); dmxValsPanel.addView(row)
+        }
+
+        val routingNames = listOf("EXT", "SEQ 1", "SEQ 2", "SEQ 3", "SEQ 4")
+        val routingBg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE; cornerRadius = 4f
+            setColor(if (Companion.extColorRouting == 0) Color.YELLOW else Companion.seqColors[Companion.extColorRouting - 1])
+        }
+        val routingBtn = TextView(this@MainActivity).apply {
+            text = routingNames[Companion.extColorRouting]; gravity = Gravity.CENTER; textSize = 14f
+            setTextColor(if (Companion.extColorRouting == 0) Color.BLACK else Color.WHITE)
+            background = routingBg
+            layoutParams = LinearLayout.LayoutParams(-1, singleRowHeight).apply { setMargins(0, 5, 0, 5) }
+            setOnClickListener {
+                Companion.extColorRouting = (Companion.extColorRouting + 1) % 5
+                text = routingNames[Companion.extColorRouting]
+                setTextColor(if (Companion.extColorRouting == 0) Color.BLACK else Color.WHITE)
+                routingBg.setColor(if (Companion.extColorRouting == 0) Color.YELLOW else Companion.seqColors[Companion.extColorRouting - 1])
+                if (Companion.extColorRouting == 0) {
+                    val dmx = Companion.getPaletteDmxValues(Companion.extColorPaletteIdx)
+                    System.arraycopy(dmx, 0, Companion.extColorDmxValues, 0, 6)
+                }
+            }
+        }
+
+        val extLockedByEx = (0 until 64).any { exIdx ->
+            Companion.activeExPresets[exIdx] &&
+                    Companion.memoryExPresets[exIdx].let { ep ->
+                        (0..3).any { j -> ep.exFix[j] == 6000 && ep.exDest[j] in listOf(9030, 9031) }
+                    }
+        }
+        val extBg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            val dmx = Companion.getPaletteDmxValues(Companion.extColorPaletteIdx)
+            setColor(Color.rgb((dmx[0]+dmx[3]).coerceAtMost(255),(dmx[1]+dmx[3]).coerceAtMost(255),(dmx[2]+dmx[3]).coerceAtMost(255)))
+            setStroke(if (extLockedByEx) 6 else if (extColorSelected) 6 else 1,
+                if (extLockedByEx) Color.MAGENTA else if (extColorSelected) Color.WHITE else Color.parseColor("#555555"))
+        }
+        val extColorBox = FrameLayout(this@MainActivity).apply {
+            layoutParams = LinearLayout.LayoutParams(-1, singleRowHeight * 2); background = extBg
+        }
+        extColorBox.addView(TextView(this@MainActivity).apply {
+            text = "External\nColor"; gravity = Gravity.CENTER; textSize = 14f; setTextColor(Color.BLACK)
+            layoutParams = FrameLayout.LayoutParams(-1, -1)
+        })
+
+        leftPanel.addView(dmxValsPanel); leftPanel.addView(routingBtn); leftPanel.addView(extColorBox)
+        container.addView(leftPanel)
+
+        val rightPanel = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 8.0f).apply { setMargins(5, 10, 10, 10) }
+        }
+
+        val matrixPanel = GridLayout(this@MainActivity).apply {
+            columnCount = 16; rowCount = 5
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, singleRowHeight * 5)
+            setBackgroundColor(Color.parseColor("#111111")); setPadding(6, 6, 6, 6)
+        }
+
+        val matrixButtons = mutableListOf<FrameLayout>()
+        val matrixColorsUI = IntArray(64)
+        val matrixColorsDMX = Array(64) { IntArray(6) }
+
+        for (i in 0 until 64) {
+            var r=0;var g=0;var b=0;var w=0;var a=0;var uv=0;var uiColor=Color.BLACK
+            when {
+                i == 63 -> {}
+                i == 0  -> { w=255; uiColor=Color.rgb(220,220,230) }
+                i == 31 -> { r=255;g=255;b=255;w=255;a=255; uiColor=Color.WHITE }
+                i in 1..30 -> { val hue=((i-1)/30.0f)*360f; val c=Color.HSVToColor(floatArrayOf(hue,1.0f,1.0f)); r=Color.red(c);g=Color.green(c);b=Color.blue(c); uiColor=c }
+                i in 32..47 -> { val hue=((i-32)/15.0f)*360f; val c=Color.HSVToColor(floatArrayOf(hue,0.6f,1.0f)); r=Color.red(c);g=Color.green(c);b=Color.blue(c);w=120; uiColor=c }
+                i in 48..62 -> {
+                    val col=i-48; val ratio=col/15.0f
+                    r=(255+(200-255)*ratio).toInt(); g=(160+(220-160)*ratio).toInt(); b=(80+(255-80)*ratio).toInt()
+                    w=(255*(1.0f-Math.abs(col-7.5f)/7.5f)).toInt().coerceIn(0,255)
+                    val blend=w/255.0f
+                    uiColor=Color.rgb((r+(255-r)*blend).toInt().coerceIn(0,255),(g+(255-g)*blend).toInt().coerceIn(0,255),(b+(255-b)*blend).toInt().coerceIn(0,255))
+                }
+            }
+            matrixColorsDMX[i] = intArrayOf(r,g,b,w,a,uv); matrixColorsUI[i] = uiColor
+        }
+
+        val groupPreviewBoxes = arrayOfNulls<FrameLayout>(8)
+
+        // Podgląd koloru grupy: ZAWSZE czyta z dmxValues (wyjście rzeczywiste)
+        // Dzięki temu SEQ nadpisuje podgląd gdy jest aktywny
+        fun getGroupPreviewColor(groupIdx: Int): Int {
+            // Priorytet 1: aktywny SEQ z krokiem kolorów – działa też dla kół kolorów
+            val activeSeqIdx = (0..3).firstOrNull { si -> seqEnabled[si] && seqGroupActive[si][groupIdx] }
+            if (activeSeqIdx != null) {
+                val sq = memorySeq[activeSeqIdx]
+                val stepIdx = sq.currentStep
+                val dmx: IntArray? = when (sq.stepType[stepIdx]) {
+                    1 -> Companion.getPaletteDmxValues(sq.stepValue[stepIdx])
+                    2 -> Companion.extColorDmxValues
+                    else -> null
+                }
+                if (dmx != null) {
+                    val r = (dmx[0]+dmx[3]).coerceAtMost(255)
+                    val g = (dmx[1]+dmx[3]).coerceAtMost(255)
+                    val b = (dmx[2]+dmx[3]).coerceAtMost(255)
+                    if (r+g+b > 0) return Color.rgb(r, g, b)
+                }
+            }
+            // Priorytet 2 usunięty – dmxValues zawsze odzwierciedla aktualny stan (paleta też go ustawia)
+            // Priorytet 3: odczyt z dmxValues (suwaki, MIDI, paleta, inne efekty)
+            val gFixes = fixturesList.filter { it.groupIdx == groupIdx }
+            val pattOn = if (Companion.seqRoutingMode[groupIdx] == 1) {
+                val order = Companion.seqRoutingOrder[groupIdx]
+                val onList = Companion.seqRoutingOn[groupIdx]
+                order.filterIndexed { pos, _ -> onList.getOrElse(pos) { true } }.toSet()
+            } else null
+            val fix = if (pattOn != null)
+                gFixes.firstOrNull { pattOn.contains(it.id) } ?: gFixes.firstOrNull()
+            else gFixes.firstOrNull()
+            if (fix == null) return Color.BLACK
+            val useBase = pattOn != null
+            var pr=0;var pg=0;var pb=0;var pw=0;var pa=0;var puv=0;var cwRaw=-1
+            for (ch in 0 until fix.channels) {
+                val actCh = fix.dmx-1+ch; if (actCh !in 0..511) continue
+                val raw = if (useBase) Companion.baseDmxValues[actCh] else Companion.dmxValues[actCh]
+                val mn=fix.paramMin[ch];val mx=fix.paramMax[ch];val range=mx-mn
+                val norm=if(range==0) raw else ((raw-mn)*255/range).coerceIn(0,255)
+                when (fix.paramMap[ch]) {
+                    "Red","Beam 1R"->pr=norm; "Green","Beam 1G"->pg=norm; "Blue","Beam 1B"->pb=norm
+                    "White","Beam 1W"->pw=norm; "Amber","Beam 1A"->pa=norm; "UV"->puv=norm
+                    "Col. wheel"->cwRaw=raw
+                }
+            }
+            val br=(pr+pw/2+pa).coerceAtMost(255); val bg=(pg+pw/2+pa/2).coerceAtMost(255); val bb=(pb+pw/2+puv).coerceAtMost(255)
+            if (maxOf(br,bg,bb) > 0) {
+                val mx2=maxOf(br,bg,bb)
+                return Color.rgb((br*255/mx2).coerceAtMost(255),(bg*255/mx2).coerceAtMost(255),(bb*255/mx2).coerceAtMost(255))
+            }
+            if (cwRaw >= 0 && fix.cwCount > 0) {
+                var bestSlot=0; var bestDiff=Int.MAX_VALUE
+                for (s in 0 until fix.cwCount) { val diff=Math.abs(fix.cwDmx[s]-cwRaw); if(diff<bestDiff){bestDiff=diff;bestSlot=s} }
+                return Companion.corePaletteColors[fix.cwColors[bestSlot]]
+            }
+            return Color.BLACK
+        }
+
+        fun updateDmxValsUI(fix: FixtureItem?) {
+            if (fix == null) { dmxValTextViews.forEach { it.text = "---" }; return }
+            var r=0;var g=0;var b=0;var w=0;var a=0;var uv=0;var d=0;var cw=-1
+            for (ch in 0 until fix.channels) {
+                val actCh=fix.dmx-1+ch; if (actCh !in 0..511) continue
+                val raw=Companion.dmxValues[actCh]
+                val mn=fix.paramMin[ch];val mx=fix.paramMax[ch];val range=mx-mn
+                val norm=if(range==0) raw else ((raw-mn)*255/range).coerceIn(0,255)
+                when(fix.paramMap[ch]) {
+                    "Red","Beam 1R"->r=norm; "Green","Beam 1G"->g=norm; "Blue","Beam 1B"->b=norm
+                    "White","Beam 1W"->w=norm; "Amber","Beam 1A"->a=norm; "UV"->uv=norm
+                    "Dimmer"->d=norm; "Col. wheel"->cw=raw
+                }
+            }
+            dmxValTextViews[0].text=String.format("%03d",r); dmxValTextViews[1].text=String.format("%03d",g)
+            dmxValTextViews[2].text=String.format("%03d",b); dmxValTextViews[3].text=String.format("%03d",w)
+            dmxValTextViews[4].text=String.format("%03d",a); dmxValTextViews[5].text=String.format("%03d",uv)
+            dmxValTextViews[6].text=String.format("%03d",d)
+            // COL. WHEEL: jeśli urządzenie je ma – pokaż wartość raw; jeśli nie – oblicz z RGB
+            if (cw >= 0) {
+                dmxValTextViews[7].text=String.format("%03d",cw)
+            } else {
+                val cwDmx = getClosestWheelDmx(fix, r, g, b)
+                val hasWheel = fix.paramMap.contains("Col. wheel")
+                dmxValTextViews[7].text = if (hasWheel || cwDmx > 0) String.format("%03d", cwDmx) else "---"
+            }
+        }
+
+        val groupTabsList = mutableListOf<LinearLayout>()
+
+        fun updateGroupUI(groupIdx: Int) {
+            colorSelectedGroup = groupIdx
+            groupTabsList.forEachIndexed { idx, tabLayout ->
+                val isSel = (idx == colorSelectedGroup)
+                val params = tabLayout.layoutParams as GridLayout.LayoutParams
+                if (isSel) { params.setMargins(2,2,2,2); tabLayout.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Color.LTGRAY)} }
+                else        { params.setMargins(2,10,2,2); tabLayout.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Color.DKGRAY)} }
+                tabLayout.layoutParams = params
+                (tabLayout.getChildAt(0) as TextView).setTextColor(if (isSel) Color.BLACK else Color.WHITE)
+            }
+            // Ramka selekcji palety – na podstawie groupColorIndices (niezależnie od SEQ)
+            val activeColorIndex = groupColorIndices[colorSelectedGroup]
+            matrixButtons.forEachIndexed { idx, btn ->
+                (btn.background as GradientDrawable).setStroke(if (idx == activeColorIndex) 8 else 0, Color.BLACK)
+            }
+            val groupFixes = fixturesList.filter { it.groupIdx == groupIdx }
+            updateDmxValsUI(groupFixes.firstOrNull())
+        }
+
+        fun applyColorToDmx(i: Int) {
+            if (extColorSelected) {
+                Companion.extColorPaletteIdx = i
+                val dmx = Companion.getPaletteDmxValues(i)
+                if (Companion.extColorRouting == 0) System.arraycopy(dmx, 0, Companion.extColorDmxValues, 0, 6)
+                extBg.setColor(Color.rgb((dmx[0]+dmx[3]).coerceAtMost(255),(dmx[1]+dmx[3]).coerceAtMost(255),(dmx[2]+dmx[3]).coerceAtMost(255)))
+                matrixButtons.forEachIndexed { idx, btn -> (btn.background as GradientDrawable).setStroke(if(idx==i) 6 else 0, Color.BLACK) }
+                return
+            }
+            groupColorIndices[colorSelectedGroup] = i
+            Companion.colorManualOverride[colorSelectedGroup] = true
+            matrixButtons.forEachIndexed { idx, btn -> (btn.background as GradientDrawable).setStroke(if(idx==i) 6 else 0, Color.BLACK) }
+
+            val dmxVals = matrixColorsDMX[i]
+            val groupFixes = fixturesList.filter { it.groupIdx == colorSelectedGroup }
+            val beamRParams = (1..10).map { "Beam ${it}R" }.toSet()
+            val beamGParams = (1..10).map { "Beam ${it}G" }.toSet()
+            val beamBParams = (1..10).map { "Beam ${it}B" }.toSet()
+            val beamWParams = (1..10).map { "Beam ${it}W" }.toSet()
+            val beamAParams = (1..10).map { "Beam ${it}A" }.toSet()
+            groupFixes.forEach { fix ->
+                for (ch in 0 until fix.channels) {
+                    val param = fix.paramMap[ch]; val actCh = fix.dmx-1+ch
+                    if (actCh in 0..511) {
+                        var v = -1
+                        when {
+                            param == "Red" || param in beamRParams -> v = dmxVals[0]
+                            param == "Green" || param in beamGParams -> v = dmxVals[1]
+                            param == "Blue" || param in beamBParams -> v = dmxVals[2]
+                            param == "White" || param in beamWParams -> v = dmxVals[3]
+                            param == "Amber" || param in beamAParams -> v = dmxVals[4]
+                            param == "UV" -> v = dmxVals[5]
+                            param == "Col. wheel" -> {
+                                val hasRgb = fix.paramMap.contains("Red") || fix.paramMap.any { it in beamRParams }
+                                if (!hasRgb) v = getClosestWheelDmx(fix,dmxVals[0],dmxVals[1],dmxVals[2])
+                            }
+                        }
+                        if (v != -1) {
+                            val mapped=fix.paramMin[ch]+(v*(fix.paramMax[ch]-fix.paramMin[ch])/255)
+                            val order = Companion.seqRoutingOrder[colorSelectedGroup]
+                            val onList = Companion.seqRoutingOn[colorSelectedGroup]
+                            val posInRouting = order.indexOf(fix.id)
+                            val isOnInSeq = Companion.seqRoutingMode[colorSelectedGroup] == 0 &&
+                                    posInRouting >= 0 && onList.getOrElse(posInRouting) { true }
+                            val isOffInPatt = Companion.seqRoutingMode[colorSelectedGroup] == 1 &&
+                                    posInRouting >= 0 && !onList.getOrElse(posInRouting) { true }
+                            // Zawsze zapisz do baseDmxValues (tło)
+                            Companion.overrideChannel(actCh, mapped)
+                            // setDmxChannel tylko dla fixture które NIE są aktywne w SEQ i NIE są OFF w PATT
+                            if (!isOnInSeq && !isOffInPatt) setDmxChannel(actCh, mapped)
+                        }
+                    }
+                }
+            }
+        }
+
+        for (i in 0 until 64) {
+            val mBtn = FrameLayout(this@MainActivity).apply {
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width=0;height=0; columnSpec=GridLayout.spec(i%16,1,1f); rowSpec=GridLayout.spec(i/16,1,1f); setMargins(2,2,2,2)
+                }
+                background = GradientDrawable().apply {
+                    shape=GradientDrawable.RECTANGLE; setColor(matrixColorsUI[i])
+                    setStroke(if(groupColorIndices[colorSelectedGroup]==i) 8 else 0, Color.BLACK)
+                }
+            }
+            matrixButtons.add(mBtn); matrixPanel.addView(mBtn)
+        }
+
+        for (i in 0..7) {
+            val grpTab = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; weightSum = 2.0f
+                tag = "MIDI:GROUP_SELECT_$i"
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width=0;height=0; columnSpec=GridLayout.spec(i*2,2,1f); rowSpec=GridLayout.spec(4,1,1f)
+                }
+                val tGrp = TextView(this@MainActivity).apply {
+                    text="${'A'+i}"; gravity=Gravity.CENTER; textSize=20f
+                    layoutParams=LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.MATCH_PARENT,1.0f)
+                }
+                val colPreviewBox = FrameLayout(this@MainActivity).apply {
+                    layoutParams=LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.MATCH_PARENT,1.0f).apply{setMargins(6,6,6,6)}
+                    setBackgroundColor(getGroupPreviewColor(i))
+                }
+                groupPreviewBoxes[i] = colPreviewBox
+                addView(tGrp); addView(colPreviewBox)
+                setOnClickListener {
+                    extColorSelected = false
+                    extBg.setStroke(1, Color.parseColor("#555555"))
+                    currentGroup = i
+                    midiCcLastValues.keys.filter { it.contains("GLOBAL_") }.toList()
+                        .forEach { midiCcLastValues.remove(it) }
+                    midiPickupTargets.keys.filter { it.contains("GLOBAL_") }.toList()
+                        .forEach { midiPickupTargets.remove(it) }
+                    midiPickedUp.removeAll { it.contains("GLOBAL_") }
+                    updateGroupUI(i)
+                }
+            }
+            groupTabsList.add(grpTab); matrixPanel.addView(grpTab)
+        }
+
+        matrixPanel.setOnTouchListener { view, event ->
+            val action = event.actionMasked
+            if (action==android.view.MotionEvent.ACTION_DOWN||action==android.view.MotionEvent.ACTION_MOVE) {
+                val w=view.width.toFloat(); val h=view.height.toFloat()
+                if (w>0&&h>0) {
+                    var col=(event.x/(w/16)).toInt(); var row=(event.y/(h/5)).toInt()
+                    col=col.coerceIn(0,15); row=row.coerceIn(0,4)
+                    if (row<4) applyColorToDmx(row*16+col)
+                }; true
+            } else false
+        }
+
+        val dimmersRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL; weightSum = 8.0f
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, singleRowHeight * 3); setPadding(6, 0, 6, 0)
+        }
+
+        for (i in 0..7) {
+            val dimSliderBox = FrameLayout(this@MainActivity).apply {
+                layoutParams=LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.MATCH_PARENT,1.0f)
+                var initialDim=0
+                val groupFixes=fixturesList.filter{it.groupIdx==i}
+                if (groupFixes.isNotEmpty()) {
+                    val fix=groupFixes[0]; for (ch in 0 until fix.channels) {
+                        if (fix.paramMap[ch]=="Dimmer") { val actCh=fix.dmx-1+ch; if(actCh in 0..511){initialDim=dmxValues[actCh];break} }
+                    }
+                }
+                val seekBar=SeekBar(this@MainActivity).apply {
+                    max=255; rotation=270f; setPadding(80,0,80,0); progress=initialDim
+                    tag = "MIDI:SLIDER_${i}_Dimmer"
+                    val sliderLen=(singleRowHeight*3.3).toInt()
+                    layoutParams=FrameLayout.LayoutParams(sliderLen,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.CENTER)
+                    thumb=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setSize(70,120);setColor(Color.DKGRAY);setStroke(2,Color.BLACK);cornerRadius=4f}
+                    setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
+                        override fun onProgressChanged(s:SeekBar?,p:Int,fromUser:Boolean) {
+                            if (!fromUser) return
+                            fixturesList.filter{it.groupIdx==i}.forEach{fix->
+                                for (ch in 0 until fix.channels) {
+                                    if (fix.paramMap[ch]=="Dimmer") {
+                                        val actCh=fix.dmx-1+ch; if(actCh in 0..511){
+                                            val pMin=fix.paramMin[ch];val pMax=fix.paramMax[ch]
+                                            val mapped=pMin+(p*(pMax-pMin)/255)
+                                            Companion.overrideChannel(actCh, mapped)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        override fun onStartTrackingTouch(s:SeekBar?){}; override fun onStopTrackingTouch(s:SeekBar?){}
+                    })
+                }
+                addView(seekBar)
+            }
+            dimmersRow.addView(dimSliderBox)
+        }
+
+        rightPanel.addView(matrixPanel); rightPanel.addView(dimmersRow)
+        container.addView(rightPanel)
+
+        updateGroupUI(colorSelectedGroup)
+
+        extColorBox.setOnClickListener {
+            val locked = (0 until 64).any { exIdx ->
+                Companion.activeExPresets[exIdx] &&
+                        Companion.memoryExPresets[exIdx].let { ep ->
+                            (0..3).any { j -> ep.exFix[j] == 6000 && ep.exDest[j] in listOf(9030, 9031) }
+                        }
+            }
+            if (locked) {
+                Toast.makeText(this@MainActivity, "Locked by active EX-preset", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            extColorSelected = !extColorSelected
+            extBg.setStroke(if(extColorSelected) 6 else 1, if(extColorSelected) Color.WHITE else Color.parseColor("#555555"))
+            if (extColorSelected) {
+                groupTabsList.forEachIndexed { _, tab ->
+                    tab.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Color.DKGRAY)}
+                    (tab.getChildAt(0) as? TextView)?.setTextColor(Color.WHITE)
+                    (tab.layoutParams as? GridLayout.LayoutParams)?.let{it.setMargins(2,10,2,2);tab.layoutParams=it}
+                }
+                matrixButtons.forEachIndexed { idx, btn ->
+                    (btn.background as GradientDrawable).setStroke(if(idx==Companion.extColorPaletteIdx) 6 else 0, Color.BLACK)
+                }
+            } else { updateGroupUI(colorSelectedGroup) }
+        }
+
+        dmxScope.launch {
+            while (isActive) {
+                delay(50)
+                if (activeViewContainer.getChildAt(0) !== container) break
+                container.post {
+                    // Wartości lewego panelu – z dmxValues (rzeczywiste wyjście)
+
+
+                    val groupFixes = fixturesList.filter { it.groupIdx == colorSelectedGroup }
+                    val beamRParams = (1..10).map { "Beam ${it}R" }.toSet()
+
+                    // Wszystkie 8 okienek podglądu grup – animowane z dmxValues
+                    for (i in 0..7) {
+                        groupPreviewBoxes[i]?.setBackgroundColor(getGroupPreviewColor(i))
+                    }
+
+                    // EXT box live
+                    val extDmx = Companion.extColorDmxValues
+                    extBg.setColor(Color.rgb((extDmx[0]+extDmx[3]).coerceAtMost(255),(extDmx[1]+extDmx[3]).coerceAtMost(255),(extDmx[2]+extDmx[3]).coerceAtMost(255)))
+                    val extNowLocked = (0 until 64).any { exIdx ->
+                        Companion.activeExPresets[exIdx] &&
+                                Companion.memoryExPresets[exIdx].let { ep ->
+                                    (0..3).any { j -> ep.exFix[j] == 6000 && ep.exDest[j] in listOf(9030, 9031) }
+                                }
+                    }
+                    extBg.setStroke(if (extNowLocked) 6 else if (extColorSelected) 6 else 1,
+                        if (extNowLocked) Color.MAGENTA else if (extColorSelected) Color.WHITE else Color.parseColor("#555555"))
+                }
+            }
+        }
+
+        colorViewRefreshCallback = {
+            runOnUiThread {
+                for (gi in 0..7) {
+                    val sb = dimmersRow.findViewWithTag<SeekBar>("MIDI:SLIDER_${gi}_Dimmer") ?: continue
+                    val fix = fixturesList.filter { it.groupIdx == gi }.firstOrNull() ?: continue
+                    for (ch in 0 until fix.channels) {
+                        if (fix.paramMap[ch] != "Dimmer") continue
+                        val addr = fix.dmx-1+ch; if (addr !in 0..511) continue
+                        val raw = Companion.baseDmxValues[addr]
+                        val range = (fix.paramMax[ch]-fix.paramMin[ch]).coerceAtLeast(1)
+                        sb.progress = ((raw-fix.paramMin[ch])*255/range).coerceIn(0,255)
+                        break
+                    }
+                }
+            }
+        }
+
+        return container
+    }
