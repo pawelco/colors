@@ -1,33 +1,24 @@
-// ========================================================
-    // COLOR VIEW (PERFECT 5x16 GRID OPTICAL MERGE)
-    // ========================================================
-    private var colorSelectedGroup = 0
-    private val groupColorIndices = IntArray(8) { -1 }
-    private var colorViewRefreshCallback: (() -> Unit)? = null
-
-    private fun createColorView(): View {
-        val totalHeight = resources.displayMetrics.heightPixels - exactRowHeight
-        val singleRowHeight = (totalHeight / 8.0).toInt()
+ private fun createColorView(): View {
+        val j = exactRowHeight
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; weightSum = 10.0f
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-            setBackgroundColor(Color.LTGRAY)
+            setBackgroundColor(Companion.COL_BG)
         }
 
         val leftPanel = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.VERTICAL; weightSum = 8f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2.0f).apply { setMargins(10, 10, 5, 10) }
         }
 
         val dmxValsPanel = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, singleRowHeight * 5)
-            setBackgroundColor(Color.parseColor("#333333")); setPadding(10, 6, 10, 6)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 5f)
+            setBackgroundColor(Companion.COL_PANEL); setPadding(10, 6, 10, 6)
         }
 
-        // Pełne nazwy parametrów + COL. WHL
-        val colorLabels = listOf("RED", "GREEN", "BLUE", "WHITE", "AMBER", "UV", "DIMMER", "COL. WHL")
+        val colorLabels = listOf("RED", "GREEN", "BLUE", "WHITE", "AMBER", "UV", "DIMMER", "COL.WHL")
         val dmxValTextViews = mutableListOf<TextView>()
         colorLabels.forEach { lbl ->
             val row = LinearLayout(this@MainActivity).apply {
@@ -35,13 +26,15 @@
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f)
             }
             val tLbl = TextView(this@MainActivity).apply {
-                text = lbl; textSize = 16f; setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f)
+                text = lbl; textSize = 13f; setTextColor(Color.WHITE)
+                setSingleLine(true)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.2f)
             }
             val tVal = TextView(this@MainActivity).apply {
-                text = "---"; textSize = 16f; setTextColor(Color.parseColor("#00FFFF"))
-                gravity = Gravity.END
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.8f)
+                text = "---"; textSize = 13f; setTextColor(Color.parseColor("#00FFFF"))
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                setSingleLine(true)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.8f)
             }
             dmxValTextViews.add(tVal); row.addView(tLbl); row.addView(tVal); dmxValsPanel.addView(row)
         }
@@ -55,7 +48,7 @@
             text = routingNames[Companion.extColorRouting]; gravity = Gravity.CENTER; textSize = 14f
             setTextColor(if (Companion.extColorRouting == 0) Color.BLACK else Color.WHITE)
             background = routingBg
-            layoutParams = LinearLayout.LayoutParams(-1, singleRowHeight).apply { setMargins(0, 5, 0, 5) }
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(0, 5, 0, 5) }
             setOnClickListener {
                 Companion.extColorRouting = (Companion.extColorRouting + 1) % 5
                 text = routingNames[Companion.extColorRouting]
@@ -79,10 +72,10 @@
             val dmx = Companion.getPaletteDmxValues(Companion.extColorPaletteIdx)
             setColor(Color.rgb((dmx[0]+dmx[3]).coerceAtMost(255),(dmx[1]+dmx[3]).coerceAtMost(255),(dmx[2]+dmx[3]).coerceAtMost(255)))
             setStroke(if (extLockedByEx) 6 else if (extColorSelected) 6 else 1,
-                if (extLockedByEx) Color.MAGENTA else if (extColorSelected) Color.WHITE else Color.parseColor("#555555"))
+                if (extLockedByEx) Color.MAGENTA else if (extColorSelected) Color.WHITE else Companion.COL_SEP)
         }
         val extColorBox = FrameLayout(this@MainActivity).apply {
-            layoutParams = LinearLayout.LayoutParams(-1, singleRowHeight * 2); background = extBg
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 3f); background = extBg
         }
         extColorBox.addView(TextView(this@MainActivity).apply {
             text = "External\nColor"; gravity = Gravity.CENTER; textSize = 14f; setTextColor(Color.BLACK)
@@ -93,13 +86,13 @@
         container.addView(leftPanel)
 
         val rightPanel = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.VERTICAL; weightSum = 8f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 8.0f).apply { setMargins(5, 10, 10, 10) }
         }
 
         val matrixPanel = GridLayout(this@MainActivity).apply {
             columnCount = 16; rowCount = 5
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, singleRowHeight * 5)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 5f)
             setBackgroundColor(Color.parseColor("#111111")); setPadding(6, 6, 6, 6)
         }
 
@@ -116,12 +109,13 @@
                 i in 1..30 -> { val hue=((i-1)/30.0f)*360f; val c=Color.HSVToColor(floatArrayOf(hue,1.0f,1.0f)); r=Color.red(c);g=Color.green(c);b=Color.blue(c); uiColor=c }
                 i in 32..47 -> { val hue=((i-32)/15.0f)*360f; val c=Color.HSVToColor(floatArrayOf(hue,0.6f,1.0f)); r=Color.red(c);g=Color.green(c);b=Color.blue(c);w=120; uiColor=c }
                 i in 48..62 -> {
-                    val col=i-48; val ratio=col/15.0f
+                    val col=i-48; val ratio=col/14.0f
                     r=(255+(200-255)*ratio).toInt(); g=(160+(220-160)*ratio).toInt(); b=(80+(255-80)*ratio).toInt()
                     w=(255*(1.0f-Math.abs(col-7.5f)/7.5f)).toInt().coerceIn(0,255)
                     val blend=w/255.0f
                     uiColor=Color.rgb((r+(255-r)*blend).toInt().coerceIn(0,255),(g+(255-g)*blend).toInt().coerceIn(0,255),(b+(255-b)*blend).toInt().coerceIn(0,255))
                 }
+                i == 63 -> { r=0;g=0;b=0;w=0;a=0;uv=0; uiColor=Color.BLACK }
             }
             matrixColorsDMX[i] = intArrayOf(r,g,b,w,a,uv); matrixColorsUI[i] = uiColor
         }
@@ -221,8 +215,8 @@
             groupTabsList.forEachIndexed { idx, tabLayout ->
                 val isSel = (idx == colorSelectedGroup)
                 val params = tabLayout.layoutParams as GridLayout.LayoutParams
-                if (isSel) { params.setMargins(2,2,2,2); tabLayout.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Color.LTGRAY)} }
-                else        { params.setMargins(2,10,2,2); tabLayout.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Color.DKGRAY)} }
+                if (isSel) { params.setMargins(2,2,2,2); tabLayout.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Companion.COL_BG)} }
+                else        { params.setMargins(2,10,2,2); tabLayout.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Companion.COL_DARK)} }
                 tabLayout.layoutParams = params
                 (tabLayout.getChildAt(0) as TextView).setTextColor(if (isSel) Color.BLACK else Color.WHITE)
             }
@@ -323,7 +317,7 @@
                 addView(tGrp); addView(colPreviewBox)
                 setOnClickListener {
                     extColorSelected = false
-                    extBg.setStroke(1, Color.parseColor("#555555"))
+                    extBg.setStroke(1, Companion.COL_SEP)
                     currentGroup = i
                     midiCcLastValues.keys.filter { it.contains("GLOBAL_") }.toList()
                         .forEach { midiCcLastValues.remove(it) }
@@ -350,7 +344,8 @@
 
         val dimmersRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL; weightSum = 8.0f
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, singleRowHeight * 3); setPadding(6, 0, 6, 0)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 3f).apply { topMargin = -(j / 8) }
+            setPadding(6, 0, 6, 0)
         }
 
         for (i in 0..7) {
@@ -366,9 +361,9 @@
                 val seekBar=SeekBar(this@MainActivity).apply {
                     max=255; rotation=270f; setPadding(80,0,80,0); progress=initialDim
                     tag = "MIDI:SLIDER_${i}_Dimmer"
-                    val sliderLen=(singleRowHeight*3.3).toInt()
+                    val sliderLen=(j*3.3).toInt()
                     layoutParams=FrameLayout.LayoutParams(sliderLen,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.CENTER)
-                    thumb=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setSize(70,120);setColor(Color.DKGRAY);setStroke(2,Color.BLACK);cornerRadius=4f}
+                    thumb=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setSize(70,120);setColor(Companion.COL_DARK);setStroke(2,Color.BLACK);cornerRadius=4f}
                     setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
                         override fun onProgressChanged(s:SeekBar?,p:Int,fromUser:Boolean) {
                             if (!fromUser) return
@@ -409,10 +404,10 @@
                 return@setOnClickListener
             }
             extColorSelected = !extColorSelected
-            extBg.setStroke(if(extColorSelected) 6 else 1, if(extColorSelected) Color.WHITE else Color.parseColor("#555555"))
+            extBg.setStroke(if(extColorSelected) 6 else 1, if(extColorSelected) Color.WHITE else Companion.COL_SEP)
             if (extColorSelected) {
                 groupTabsList.forEachIndexed { _, tab ->
-                    tab.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Color.DKGRAY)}
+                    tab.background=GradientDrawable().apply{shape=GradientDrawable.RECTANGLE;setColor(Companion.COL_DARK)}
                     (tab.getChildAt(0) as? TextView)?.setTextColor(Color.WHITE)
                     (tab.layoutParams as? GridLayout.LayoutParams)?.let{it.setMargins(2,10,2,2);tab.layoutParams=it}
                 }
@@ -448,7 +443,7 @@
                                 }
                     }
                     extBg.setStroke(if (extNowLocked) 6 else if (extColorSelected) 6 else 1,
-                        if (extNowLocked) Color.MAGENTA else if (extColorSelected) Color.WHITE else Color.parseColor("#555555"))
+                        if (extNowLocked) Color.MAGENTA else if (extColorSelected) Color.WHITE else Companion.COL_SEP)
                 }
             }
         }
